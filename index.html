@@ -546,12 +546,13 @@
       };
     }
 
-    function generateAmbientUnderwaterSamples(sampleRate = 22050, durationSec = 6) {
+    function generateAmbientUnderwaterSamples(sampleRate = 22050, durationSec = 10) {
       const length = Math.floor(sampleRate * durationSec);
       const samples = new Float32Array(length);
       const rng = createSeededRng(202611);
       let lp1 = 0;
       let lp2 = 0;
+      let lp3 = 0;
       let hpPrev = 0;
       let hpOut = 0;
 
@@ -559,50 +560,44 @@
         const t = i / sampleRate;
         const white = rng() * 2 - 1;
         const swell =
-          0.7 +
-          0.3 * Math.sin((2 * Math.PI * 2 * t) / durationSec) * 0.65 +
-          0.18 * Math.sin((2 * Math.PI * 3 * t) / durationSec + 1.1);
-        lp1 = lp1 + 0.14 * (white - lp1);
-        lp2 = lp2 + 0.22 * (lp1 - lp2);
-        hpOut = 0.96 * (hpOut + lp2 - hpPrev);
-        hpPrev = lp2;
-        samples[i] = hpOut * 0.92 * swell;
+          0.78 +
+          0.22 * Math.sin((2 * Math.PI * 1 * t) / durationSec) * 0.7 +
+          0.12 * Math.sin((2 * Math.PI * 2 * t) / durationSec + 0.9);
+        lp1 = lp1 + 0.08 * (white - lp1);
+        lp2 = lp2 + 0.11 * (lp1 - lp2);
+        lp3 = lp3 + 0.15 * (lp2 - lp3);
+        hpOut = 0.975 * (hpOut + lp3 - hpPrev);
+        hpPrev = lp3;
+        samples[i] = hpOut * 0.36 * swell;
       }
 
-      const swishes = [
-        { start: 0.45, dur: 0.36, amp: 0.32 },
-        { start: 1.95, dur: 0.42, amp: 0.28 },
-        { start: 3.45, dur: 0.34, amp: 0.34 },
-        { start: 4.85, dur: 0.38, amp: 0.29 },
+      const glides = [
+        { start: 1.4, dur: 1.25, amp: 0.11 },
+        { start: 6.2, dur: 1.35, amp: 0.1 },
       ];
-      for (const sw of swishes) {
-        const startIdx = Math.floor(sw.start * sampleRate);
-        const swLen = Math.floor(sw.dur * sampleRate);
-        let swLp = 0;
-        let swBp = 0;
-        for (let j = 0; j < swLen; j++) {
+      for (const g of glides) {
+        const startIdx = Math.floor(g.start * sampleRate);
+        const gLen = Math.floor(g.dur * sampleRate);
+        let gLp1 = 0;
+        let gLp2 = 0;
+        for (let j = 0; j < gLen; j++) {
           const idx = (startIdx + j) % length;
-          const p = j / swLen;
-          const env = Math.sin(Math.PI * p);
+          const p = j / gLen;
+          const env = Math.pow(Math.sin(Math.PI * p), 1.6);
           const noise = rng() * 2 - 1;
-          const alpha = 0.28 - p * 0.16;
-          swLp = swLp + alpha * (noise - swLp);
-          swBp = swBp + 0.38 * (swLp - swBp);
-          samples[idx] += (swLp - swBp * 0.4) * env * sw.amp * 1.4;
+          const alpha = 0.11 - p * 0.05;
+          gLp1 = gLp1 + alpha * (noise - gLp1);
+          gLp2 = gLp2 + 0.18 * (gLp1 - gLp2);
+          samples[idx] += gLp2 * env * g.amp;
         }
       }
 
       const bubbles = [
-        { time: 0.3, f0: 420, f1: 920, dur: 0.075, amp: 0.3 },
-        { time: 0.42, f0: 540, f1: 1120, dur: 0.06, amp: 0.24 },
-        { time: 1.15, f0: 380, f1: 860, dur: 0.085, amp: 0.28 },
-        { time: 1.88, f0: 490, f1: 1050, dur: 0.07, amp: 0.32 },
-        { time: 2.55, f0: 410, f1: 940, dur: 0.08, amp: 0.26 },
-        { time: 2.68, f0: 580, f1: 1180, dur: 0.055, amp: 0.22 },
-        { time: 3.55, f0: 450, f1: 990, dur: 0.075, amp: 0.31 },
-        { time: 4.35, f0: 395, f1: 880, dur: 0.085, amp: 0.27 },
-        { time: 5.15, f0: 510, f1: 1090, dur: 0.07, amp: 0.3 },
-        { time: 5.27, f0: 620, f1: 1220, dur: 0.055, amp: 0.22 },
+        { time: 0.85, f0: 270, f1: 540, dur: 0.11, amp: 0.14 },
+        { time: 3.1, f0: 310, f1: 620, dur: 0.095, amp: 0.12 },
+        { time: 3.3, f0: 360, f1: 690, dur: 0.085, amp: 0.09 },
+        { time: 5.75, f0: 250, f1: 510, dur: 0.115, amp: 0.13 },
+        { time: 8.2, f0: 295, f1: 590, dur: 0.1, amp: 0.12 },
       ];
       for (const b of bubbles) {
         const startIdx = Math.floor(b.time * sampleRate);
@@ -613,12 +608,12 @@
           const p = j / bLen;
           const freq = b.f0 * Math.pow(b.f1 / b.f0, p);
           phase += (2 * Math.PI * freq) / sampleRate;
-          const env = Math.sin(Math.PI * p) * Math.pow(1 - p * 0.4, 1.2);
+          const env = Math.sin(Math.PI * p) * Math.pow(1 - p * 0.35, 1.3);
           samples[idx] += Math.sin(phase) * env * b.amp;
         }
       }
 
-      const fadeSamples = Math.floor(sampleRate * 0.2);
+      const fadeSamples = Math.floor(sampleRate * 0.35);
       for (let i = 0; i < fadeSamples; i++) {
         const w = i / fadeSamples;
         const head = samples[i];
@@ -627,73 +622,79 @@
       }
 
       for (let i = 0; i < length; i++) {
-        samples[i] = Math.tanh(samples[i] * 1.15) * 0.72;
+        samples[i] = Math.tanh(samples[i] * 0.95) * 0.55;
       }
       return samples;
     }
 
     function generateClickSamples(type = "click", sampleRate = 22050) {
       const durations = {
-        click: 0.075,
-        toggle: 0.1,
-        open: 0.11,
-        success: 0.22,
-        delete: 0.11,
-        snap: 0.045,
+        click: 0.036,
+        toggle: 0.068,
+        open: 0.062,
+        success: 0.16,
+        delete: 0.075,
+        snap: 0.024,
       };
-      const dur = durations[type] || 0.075;
+      const dur = durations[type] || 0.036;
       const length = Math.floor(sampleRate * dur);
       const samples = new Float32Array(length);
 
       if (type === "click") {
-        let ph1 = 0;
-        let ph2 = 0;
+        let phTick = 0;
+        let phBody = 0;
         for (let i = 0; i < length; i++) {
           const t = i / sampleRate;
-          const p = i / length;
-          const f1 = 960 * Math.pow(360 / 960, Math.min(1, t / 0.06));
-          const f2 = 2150 * Math.pow(880 / 2150, Math.min(1, t / 0.025));
-          ph1 += (2 * Math.PI * f1) / sampleRate;
-          ph2 += (2 * Math.PI * f2) / sampleRate;
-          const env1 = (1 - p) * (1 - p);
-          const env2 = t < 0.028 ? 1 - t / 0.028 : 0;
-          samples[i] = Math.sin(ph1) * 0.52 * env1 + Math.sin(ph2) * 0.28 * env2;
+          const attack = Math.min(1, t / 0.0015);
+          const tickFreq = 1650 * Math.pow(480 / 1650, Math.min(1, t / 0.016));
+          const bodyFreq = 260 * Math.pow(110 / 260, Math.min(1, t / 0.025));
+          phTick += (2 * Math.PI * tickFreq) / sampleRate;
+          phBody += (2 * Math.PI * bodyFreq) / sampleRate;
+          const tickEnv = attack * Math.exp(-t / 0.0075);
+          const bodyEnv = attack * Math.exp(-t / 0.011);
+          samples[i] = Math.sin(phTick) * 0.42 * tickEnv + Math.sin(phBody) * 0.28 * bodyEnv;
         }
         return samples;
       }
       if (type === "toggle") {
-        let ph = 0;
+        let ph1 = 0;
+        let ph2 = 0;
         for (let i = 0; i < length; i++) {
-          const p = i / length;
-          const f = 540 * Math.pow(880 / 540, p);
-          ph += (2 * Math.PI * f) / sampleRate;
-          samples[i] = Math.sin(ph) * 0.48 * Math.pow(1 - p, 1.3);
+          const t = i / sampleRate;
+          ph1 += (2 * Math.PI * 1150) / sampleRate;
+          ph2 += (2 * Math.PI * 1550) / sampleRate;
+          const e1 = t < 0.025 ? Math.min(1, t / 0.0015) * Math.exp(-t / 0.007) : 0;
+          const t2 = t - 0.026;
+          const e2 = t2 >= 0 ? Math.min(1, t2 / 0.0015) * Math.exp(-t2 / 0.009) : 0;
+          samples[i] = Math.sin(ph1) * 0.34 * e1 + Math.sin(ph2) * 0.4 * e2;
         }
         return samples;
       }
       if (type === "open") {
         let ph = 0;
         for (let i = 0; i < length; i++) {
-          const p = i / length;
-          const f = 430 * Math.pow(720 / 430, p);
+          const t = i / sampleRate;
+          const attack = Math.min(1, t / 0.002);
+          const f = 580 * Math.pow(920 / 580, t / dur);
           ph += (2 * Math.PI * f) / sampleRate;
-          samples[i] = Math.sin(ph) * 0.46 * Math.pow(1 - p, 1.3);
+          samples[i] = Math.sin(ph) * 0.38 * attack * Math.exp(-t / 0.018);
         }
         return samples;
       }
       if (type === "success") {
         const notes = [
-          { start: 0, dur: 0.14, freq: 523.25 },
-          { start: 0.065, dur: 0.15, freq: 659.25 },
+          { start: 0, dur: 0.08, freq: 660 },
+          { start: 0.055, dur: 0.1, freq: 880 },
         ];
         for (const n of notes) {
           const sIdx = Math.floor(n.start * sampleRate);
           const nLen = Math.floor(n.dur * sampleRate);
           let ph = 0;
           for (let j = 0; j < nLen && sIdx + j < length; j++) {
-            const p = j / nLen;
+            const t = j / sampleRate;
+            const attack = Math.min(1, t / 0.002);
             ph += (2 * Math.PI * n.freq) / sampleRate;
-            samples[sIdx + j] += Math.sin(ph) * 0.42 * Math.pow(1 - p, 1.5);
+            samples[sIdx + j] += Math.sin(ph) * 0.32 * attack * Math.exp(-t / 0.032);
           }
         }
         return samples;
@@ -701,19 +702,21 @@
       if (type === "delete") {
         let ph = 0;
         for (let i = 0; i < length; i++) {
-          const p = i / length;
-          const f = 440 * Math.pow(210 / 440, p);
+          const t = i / sampleRate;
+          const attack = Math.min(1, t / 0.002);
+          const f = 380 * Math.pow(190 / 380, t / dur);
           ph += (2 * Math.PI * f) / sampleRate;
-          samples[i] = Math.sin(ph) * 0.45 * Math.pow(1 - p, 1.3);
+          samples[i] = Math.sin(ph) * 0.38 * attack * Math.exp(-t / 0.02);
         }
         return samples;
       }
       let ph = 0;
       for (let i = 0; i < length; i++) {
-        const p = i / length;
-        const f = 940 * Math.pow(640 / 940, p);
+        const t = i / sampleRate;
+        const attack = Math.min(1, t / 0.001);
+        const f = 1400 * Math.pow(620 / 1400, t / dur);
         ph += (2 * Math.PI * f) / sampleRate;
-        samples[i] = Math.sin(ph) * 0.42 * Math.pow(1 - p, 1.4);
+        samples[i] = Math.sin(ph) * 0.32 * attack * Math.exp(-t / 0.006);
       }
       return samples;
     }
@@ -733,14 +736,14 @@
       if (!ambientAudioEl) {
         try {
           if (!ambientAudioUrl) {
-            const samples = generateAmbientUnderwaterSamples(22050, 6);
+            const samples = generateAmbientUnderwaterSamples(22050, 10);
             const wav = encodePcm16MonoWav(samples, 22050);
             ambientAudioUrl = wavBytesToBlobUrl(wav);
           }
           const el = new Audio(ambientAudioUrl);
           el.loop = true;
           el.preload = "auto";
-          el.volume = 0.48;
+          el.volume = 0.24;
           el.playsInline = true;
           el.setAttribute("playsinline", "true");
           el.setAttribute("webkit-playsinline", "true");
@@ -771,7 +774,7 @@
         const url = getSfxUrl(type);
         if (!url || typeof Audio === "undefined") return;
         const el = new Audio(url);
-        el.volume = 0.65;
+        el.volume = 0.45;
         el.playsInline = true;
         const p = el.play();
         if (p && typeof p.catch === "function") p.catch(() => {});
@@ -789,7 +792,7 @@
       if (!el || !el.paused || ambientStartingFlag) return;
       ambientStartingFlag = true;
       try {
-        el.volume = 0.48;
+        el.volume = 0.24;
         const promise = el.play();
         if (promise && typeof promise.then === "function") {
           promise
@@ -869,44 +872,52 @@
         const now = ctx.currentTime;
 
         if (type === "click") {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = "triangle";
-          osc.frequency.setValueAtTime(960, now);
-          osc.frequency.exponentialRampToValueAtTime(360, now + 0.06);
-          gain.gain.setValueAtTime(0.45, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.072);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start(now);
-          osc.stop(now + 0.075);
+          const tickOsc = ctx.createOscillator();
+          const tickGain = ctx.createGain();
+          tickOsc.type = "sine";
+          tickOsc.frequency.setValueAtTime(1650, now);
+          tickOsc.frequency.exponentialRampToValueAtTime(480, now + 0.016);
+          tickGain.gain.setValueAtTime(0.001, now);
+          tickGain.gain.linearRampToValueAtTime(0.3, now + 0.0015);
+          tickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.022);
+          tickOsc.connect(tickGain);
+          tickGain.connect(ctx.destination);
+          tickOsc.start(now);
+          tickOsc.stop(now + 0.026);
 
-          const snapOsc = ctx.createOscillator();
-          const snapGain = ctx.createGain();
-          snapOsc.type = "sine";
-          snapOsc.frequency.setValueAtTime(2150, now);
-          snapOsc.frequency.exponentialRampToValueAtTime(880, now + 0.024);
-          snapGain.gain.setValueAtTime(0.24, now);
-          snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.028);
-          snapOsc.connect(snapGain);
-          snapGain.connect(ctx.destination);
-          snapOsc.start(now);
-          snapOsc.stop(now + 0.032);
+          const bodyOsc = ctx.createOscillator();
+          const bodyGain = ctx.createGain();
+          bodyOsc.type = "triangle";
+          bodyOsc.frequency.setValueAtTime(260, now);
+          bodyOsc.frequency.exponentialRampToValueAtTime(110, now + 0.024);
+          bodyGain.gain.setValueAtTime(0.001, now);
+          bodyGain.gain.linearRampToValueAtTime(0.2, now + 0.0015);
+          bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.028);
+          bodyOsc.connect(bodyGain);
+          bodyGain.connect(ctx.destination);
+          bodyOsc.start(now);
+          bodyOsc.stop(now + 0.032);
           return;
         }
 
         if (type === "toggle") {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = "triangle";
-          osc.frequency.setValueAtTime(540, now);
-          osc.frequency.exponentialRampToValueAtTime(880, now + 0.085);
-          gain.gain.setValueAtTime(0.4, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start(now);
-          osc.stop(now + 0.105);
+          [
+            { offset: 0, f: 1150 },
+            { offset: 0.026, f: 1550 },
+          ].forEach((step) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            const t = now + step.offset;
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(step.f, t);
+            gain.gain.setValueAtTime(0.001, t);
+            gain.gain.linearRampToValueAtTime(0.24, t + 0.0015);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.022);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(t);
+            osc.stop(t + 0.025);
+          });
           return;
         }
 
@@ -914,31 +925,35 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "sine";
-          osc.frequency.setValueAtTime(430, now);
-          osc.frequency.exponentialRampToValueAtTime(720, now + 0.095);
-          gain.gain.setValueAtTime(0.38, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+          osc.frequency.setValueAtTime(580, now);
+          osc.frequency.exponentialRampToValueAtTime(920, now + 0.045);
+          gain.gain.setValueAtTime(0.001, now);
+          gain.gain.linearRampToValueAtTime(0.24, now + 0.002);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.052);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.115);
+          osc.stop(now + 0.056);
           return;
         }
 
         if (type === "success") {
-          const notes = [523.25, 659.25];
-          notes.forEach((freq, idx) => {
+          [
+            { offset: 0, freq: 660 },
+            { offset: 0.055, freq: 880 },
+          ].forEach((n) => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
-            const start = now + idx * 0.065;
+            const t = now + n.offset;
             osc.type = "sine";
-            osc.frequency.setValueAtTime(freq, start);
-            gain.gain.setValueAtTime(0.38, start);
-            gain.gain.exponentialRampToValueAtTime(0.001, start + 0.15);
+            osc.frequency.setValueAtTime(n.freq, t);
+            gain.gain.setValueAtTime(0.001, t);
+            gain.gain.linearRampToValueAtTime(0.22, t + 0.002);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
             osc.connect(gain);
             gain.connect(ctx.destination);
-            osc.start(start);
-            osc.stop(start + 0.16);
+            osc.start(t);
+            osc.stop(t + 0.095);
           });
           return;
         }
@@ -947,14 +962,15 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "triangle";
-          osc.frequency.setValueAtTime(440, now);
-          osc.frequency.exponentialRampToValueAtTime(210, now + 0.1);
-          gain.gain.setValueAtTime(0.38, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+          osc.frequency.setValueAtTime(380, now);
+          osc.frequency.exponentialRampToValueAtTime(190, now + 0.055);
+          gain.gain.setValueAtTime(0.001, now);
+          gain.gain.linearRampToValueAtTime(0.24, now + 0.002);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.062);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.12);
+          osc.stop(now + 0.068);
           return;
         }
 
@@ -962,14 +978,15 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "sine";
-          osc.frequency.setValueAtTime(940, now);
-          osc.frequency.exponentialRampToValueAtTime(640, now + 0.035);
-          gain.gain.setValueAtTime(0.32, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
+          osc.frequency.setValueAtTime(1400, now);
+          osc.frequency.exponentialRampToValueAtTime(620, now + 0.018);
+          gain.gain.setValueAtTime(0.001, now);
+          gain.gain.linearRampToValueAtTime(0.22, now + 0.001);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.045);
+          osc.stop(now + 0.024);
         }
       } catch (e) {}
     }
