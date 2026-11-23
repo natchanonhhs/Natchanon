@@ -488,19 +488,235 @@
       </svg>
     );
 
-    // ==================== WEB AUDIO BUTTON & SWIMMING FISH AMBIENT ENGINE ====================
+    // ==================== HYBRID PCM WAV + WEB AUDIO BUTTON & SWIMMING FISH ENGINE ====================
     const SOUND_STORAGE_KEY = "portal_sound_enabled";
     let audioCtxInstance = null;
     let audioUnlockedFlag = false;
     let lastDelegatedSoundAt = 0;
 
-    let ambientRunningFlag = false;
-    let ambientMasterGain = null;
-    let ambientNoiseSource = null;
-    let ambientLfo = null;
-    let ambientSwishLfo = null;
-    let ambientBubbleTimer = null;
-    let ambientNoiseBuffer = null;
+    let ambientAudioEl = null;
+    let ambientAudioUrl = null;
+    let ambientStartingFlag = false;
+    const sfxAudioUrls = {};
+
+    function encodePcm16MonoWav(samples, sampleRate = 22050) {
+      const numSamples = samples.length;
+      const dataSize = numSamples * 2;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+      const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i));
+        }
+      };
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, "data");
+      view.setUint32(40, dataSize, true);
+      let offset = 44;
+      for (let i = 0; i < numSamples; i++) {
+        const clamped = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+        offset += 2;
+      }
+      return new Uint8Array(buffer);
+    }
+
+    function wavBytesToBlobUrl(wavBytes) {
+      const copy = new Uint8Array(wavBytes.length);
+      copy.set(wavBytes);
+      const blob = new Blob([copy.buffer], { type: "audio/wav" });
+      return URL.createObjectURL(blob);
+    }
+
+    function createSeededRng(seed = 1337) {
+      let s = seed >>> 0;
+      return () => {
+        s = (s * 1664525 + 1013904223) >>> 0;
+        return s / 4294967296;
+      };
+    }
+
+    function generateAmbientUnderwaterSamples(sampleRate = 22050, durationSec = 6) {
+      const length = Math.floor(sampleRate * durationSec);
+      const samples = new Float32Array(length);
+      const rng = createSeededRng(202611);
+      let lp1 = 0;
+      let lp2 = 0;
+      let hpPrev = 0;
+      let hpOut = 0;
+
+      for (let i = 0; i < length; i++) {
+        const t = i / sampleRate;
+        const white = rng() * 2 - 1;
+        const swell =
+          0.7 +
+          0.3 * Math.sin((2 * Math.PI * 2 * t) / durationSec) * 0.65 +
+          0.18 * Math.sin((2 * Math.PI * 3 * t) / durationSec + 1.1);
+        lp1 = lp1 + 0.14 * (white - lp1);
+        lp2 = lp2 + 0.22 * (lp1 - lp2);
+        hpOut = 0.96 * (hpOut + lp2 - hpPrev);
+        hpPrev = lp2;
+        samples[i] = hpOut * 0.92 * swell;
+      }
+
+      const swishes = [
+        { start: 0.45, dur: 0.36, amp: 0.32 },
+        { start: 1.95, dur: 0.42, amp: 0.28 },
+        { start: 3.45, dur: 0.34, amp: 0.34 },
+        { start: 4.85, dur: 0.38, amp: 0.29 },
+      ];
+      for (const sw of swishes) {
+        const startIdx = Math.floor(sw.start * sampleRate);
+        const swLen = Math.floor(sw.dur * sampleRate);
+        let swLp = 0;
+        let swBp = 0;
+        for (let j = 0; j < swLen; j++) {
+          const idx = (startIdx + j) % length;
+          const p = j / swLen;
+          const env = Math.sin(Math.PI * p);
+          const noise = rng() * 2 - 1;
+          const alpha = 0.28 - p * 0.16;
+          swLp = swLp + alpha * (noise - swLp);
+          swBp = swBp + 0.38 * (swLp - swBp);
+          samples[idx] += (swLp - swBp * 0.4) * env * sw.amp * 1.4;
+        }
+      }
+
+      const bubbles = [
+        { time: 0.3, f0: 420, f1: 920, dur: 0.075, amp: 0.3 },
+        { time: 0.42, f0: 540, f1: 1120, dur: 0.06, amp: 0.24 },
+        { time: 1.15, f0: 380, f1: 860, dur: 0.085, amp: 0.28 },
+        { time: 1.88, f0: 490, f1: 1050, dur: 0.07, amp: 0.32 },
+        { time: 2.55, f0: 410, f1: 940, dur: 0.08, amp: 0.26 },
+        { time: 2.68, f0: 580, f1: 1180, dur: 0.055, amp: 0.22 },
+        { time: 3.55, f0: 450, f1: 990, dur: 0.075, amp: 0.31 },
+        { time: 4.35, f0: 395, f1: 880, dur: 0.085, amp: 0.27 },
+        { time: 5.15, f0: 510, f1: 1090, dur: 0.07, amp: 0.3 },
+        { time: 5.27, f0: 620, f1: 1220, dur: 0.055, amp: 0.22 },
+      ];
+      for (const b of bubbles) {
+        const startIdx = Math.floor(b.time * sampleRate);
+        const bLen = Math.floor(b.dur * sampleRate);
+        let phase = 0;
+        for (let j = 0; j < bLen; j++) {
+          const idx = (startIdx + j) % length;
+          const p = j / bLen;
+          const freq = b.f0 * Math.pow(b.f1 / b.f0, p);
+          phase += (2 * Math.PI * freq) / sampleRate;
+          const env = Math.sin(Math.PI * p) * Math.pow(1 - p * 0.4, 1.2);
+          samples[idx] += Math.sin(phase) * env * b.amp;
+        }
+      }
+
+      const fadeSamples = Math.floor(sampleRate * 0.2);
+      for (let i = 0; i < fadeSamples; i++) {
+        const w = i / fadeSamples;
+        const head = samples[i];
+        const tail = samples[length - fadeSamples + i];
+        samples[i] = head * w + tail * (1 - w);
+      }
+
+      for (let i = 0; i < length; i++) {
+        samples[i] = Math.tanh(samples[i] * 1.15) * 0.72;
+      }
+      return samples;
+    }
+
+    function generateClickSamples(type = "click", sampleRate = 22050) {
+      const durations = {
+        click: 0.075,
+        toggle: 0.1,
+        open: 0.11,
+        success: 0.22,
+        delete: 0.11,
+        snap: 0.045,
+      };
+      const dur = durations[type] || 0.075;
+      const length = Math.floor(sampleRate * dur);
+      const samples = new Float32Array(length);
+
+      if (type === "click") {
+        let ph1 = 0;
+        let ph2 = 0;
+        for (let i = 0; i < length; i++) {
+          const t = i / sampleRate;
+          const p = i / length;
+          const f1 = 960 * Math.pow(360 / 960, Math.min(1, t / 0.06));
+          const f2 = 2150 * Math.pow(880 / 2150, Math.min(1, t / 0.025));
+          ph1 += (2 * Math.PI * f1) / sampleRate;
+          ph2 += (2 * Math.PI * f2) / sampleRate;
+          const env1 = (1 - p) * (1 - p);
+          const env2 = t < 0.028 ? 1 - t / 0.028 : 0;
+          samples[i] = Math.sin(ph1) * 0.52 * env1 + Math.sin(ph2) * 0.28 * env2;
+        }
+        return samples;
+      }
+      if (type === "toggle") {
+        let ph = 0;
+        for (let i = 0; i < length; i++) {
+          const p = i / length;
+          const f = 540 * Math.pow(880 / 540, p);
+          ph += (2 * Math.PI * f) / sampleRate;
+          samples[i] = Math.sin(ph) * 0.48 * Math.pow(1 - p, 1.3);
+        }
+        return samples;
+      }
+      if (type === "open") {
+        let ph = 0;
+        for (let i = 0; i < length; i++) {
+          const p = i / length;
+          const f = 430 * Math.pow(720 / 430, p);
+          ph += (2 * Math.PI * f) / sampleRate;
+          samples[i] = Math.sin(ph) * 0.46 * Math.pow(1 - p, 1.3);
+        }
+        return samples;
+      }
+      if (type === "success") {
+        const notes = [
+          { start: 0, dur: 0.14, freq: 523.25 },
+          { start: 0.065, dur: 0.15, freq: 659.25 },
+        ];
+        for (const n of notes) {
+          const sIdx = Math.floor(n.start * sampleRate);
+          const nLen = Math.floor(n.dur * sampleRate);
+          let ph = 0;
+          for (let j = 0; j < nLen && sIdx + j < length; j++) {
+            const p = j / nLen;
+            ph += (2 * Math.PI * n.freq) / sampleRate;
+            samples[sIdx + j] += Math.sin(ph) * 0.42 * Math.pow(1 - p, 1.5);
+          }
+        }
+        return samples;
+      }
+      if (type === "delete") {
+        let ph = 0;
+        for (let i = 0; i < length; i++) {
+          const p = i / length;
+          const f = 440 * Math.pow(210 / 440, p);
+          ph += (2 * Math.PI * f) / sampleRate;
+          samples[i] = Math.sin(ph) * 0.45 * Math.pow(1 - p, 1.3);
+        }
+        return samples;
+      }
+      let ph = 0;
+      for (let i = 0; i < length; i++) {
+        const p = i / length;
+        const f = 940 * Math.pow(640 / 940, p);
+        ph += (2 * Math.PI * f) / sampleRate;
+        samples[i] = Math.sin(ph) * 0.42 * Math.pow(1 - p, 1.4);
+      }
+      return samples;
+    }
 
     function getAudioContext() {
       if (typeof window === "undefined") return null;
@@ -512,205 +728,90 @@
       return audioCtxInstance;
     }
 
-    function getOrCreateAmbientNoiseBuffer(ctx) {
-      if (ambientNoiseBuffer && ambientNoiseBuffer.sampleRate === ctx.sampleRate) {
-        return ambientNoiseBuffer;
+    function getAmbientAudioElement() {
+      if (typeof window === "undefined" || typeof Audio === "undefined") return null;
+      if (!ambientAudioEl) {
+        try {
+          if (!ambientAudioUrl) {
+            const samples = generateAmbientUnderwaterSamples(22050, 6);
+            const wav = encodePcm16MonoWav(samples, 22050);
+            ambientAudioUrl = wavBytesToBlobUrl(wav);
+          }
+          const el = new Audio(ambientAudioUrl);
+          el.loop = true;
+          el.preload = "auto";
+          el.volume = 0.48;
+          el.playsInline = true;
+          el.setAttribute("playsinline", "true");
+          el.setAttribute("webkit-playsinline", "true");
+          ambientAudioEl = el;
+        } catch (e) {
+          return null;
+        }
       }
-      const durationSec = 4;
-      const length = Math.floor(ctx.sampleRate * durationSec);
-      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-
-      let lastOut = 0;
-      for (let i = 0; i < length; i++) {
-        const white = Math.random() * 2 - 1;
-        lastOut = (lastOut + 0.025 * white) / 1.025;
-        data[i] = lastOut * 2.8;
-      }
-
-      const fadeSamples = Math.floor(ctx.sampleRate * 0.15);
-      for (let i = 0; i < fadeSamples; i++) {
-        const ratio = i / fadeSamples;
-        const head = data[i];
-        const tail = data[length - fadeSamples + i];
-        data[i] = head * ratio + tail * (1 - ratio);
-      }
-
-      ambientNoiseBuffer = buffer;
-      return buffer;
+      return ambientAudioEl;
     }
 
-    function triggerSwimBubbleAndSwish(ctx) {
-      if (!ambientRunningFlag || !ambientMasterGain || !isSoundEnabled()) return;
-      if (ctx.state !== "running") return;
+    function getSfxUrl(type) {
+      if (typeof window === "undefined") return null;
+      if (sfxAudioUrls[type]) return sfxAudioUrls[type];
       try {
-        const now = ctx.currentTime;
-        if (Math.random() < 0.72) {
-          const swishSrc = ctx.createBufferSource();
-          swishSrc.buffer = getOrCreateAmbientNoiseBuffer(ctx);
-          const swishFilter = ctx.createBiquadFilter();
-          swishFilter.type = "bandpass";
-          swishFilter.Q.setValueAtTime(1.8, now);
-          const startFreq = 460 + Math.random() * 240;
-          swishFilter.frequency.setValueAtTime(startFreq, now);
-          swishFilter.frequency.exponentialRampToValueAtTime(190, now + 0.24);
+        const samples = generateClickSamples(type, 22050);
+        const wav = encodePcm16MonoWav(samples, 22050);
+        const url = wavBytesToBlobUrl(wav);
+        sfxAudioUrls[type] = url;
+        return url;
+      } catch (e) {
+        return null;
+      }
+    }
 
-          const swishGain = ctx.createGain();
-          swishGain.gain.setValueAtTime(0.001, now);
-          swishGain.gain.linearRampToValueAtTime(0.18, now + 0.06);
-          swishGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
-
-          swishSrc.connect(swishFilter);
-          swishFilter.connect(swishGain);
-          swishGain.connect(ambientMasterGain);
-          const offset = Math.random() * 2.5;
-          swishSrc.start(now, offset, 0.28);
-          swishSrc.stop(now + 0.29);
-        }
-
-        const count = Math.random() < 0.35 ? 2 : 1;
-        for (let i = 0; i < count; i++) {
-          const start = now + i * 0.09 + Math.random() * 0.04;
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          const baseFreq = 320 + Math.random() * 220;
-          const dur = 0.06 + Math.random() * 0.045;
-          osc.type = "sine";
-          osc.frequency.setValueAtTime(baseFreq, start);
-          osc.frequency.exponentialRampToValueAtTime(baseFreq * 2.15, start + dur);
-
-          gain.gain.setValueAtTime(0.001, start);
-          gain.gain.linearRampToValueAtTime(0.11, start + 0.012);
-          gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
-
-          osc.connect(gain);
-          gain.connect(ambientMasterGain);
-          osc.start(start);
-          osc.stop(start + dur + 0.01);
-        }
+    function playHtmlSfx(type) {
+      try {
+        const url = getSfxUrl(type);
+        if (!url || typeof Audio === "undefined") return;
+        const el = new Audio(url);
+        el.volume = 0.65;
+        el.playsInline = true;
+        const p = el.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
       } catch (e) {}
     }
 
-    function scheduleNextBubble() {
-      if (!ambientRunningFlag) return;
-      const delay = 850 + Math.random() * 1700;
-      ambientBubbleTimer = setTimeout(() => {
-        const ctx = getAudioContext();
-        if (ctx && ambientRunningFlag && isSoundEnabled()) {
-          triggerSwimBubbleAndSwish(ctx);
-          scheduleNextBubble();
-        }
-      }, delay);
+    function isAmbientPlaying() {
+      if (!ambientAudioEl) return false;
+      return !ambientAudioEl.paused && !ambientAudioEl.ended;
     }
 
     function startAmbientWater() {
       if (!isSoundEnabled()) return;
-      const ctx = getAudioContext();
-      if (!ctx) return;
-      if (ctx.state === "suspended") {
-        ctx.resume().catch(() => {});
-      }
-      if (ctx.state !== "running") return;
-      if (ambientRunningFlag) return;
-
+      const el = getAmbientAudioElement();
+      if (!el || !el.paused || ambientStartingFlag) return;
+      ambientStartingFlag = true;
       try {
-        const now = ctx.currentTime;
-        const master = ctx.createGain();
-        master.gain.setValueAtTime(0.001, now);
-        master.gain.linearRampToValueAtTime(0.24, now + 0.9);
-        master.connect(ctx.destination);
-
-        const src = ctx.createBufferSource();
-        src.buffer = getOrCreateAmbientNoiseBuffer(ctx);
-        src.loop = true;
-
-        const deepFilter = ctx.createBiquadFilter();
-        deepFilter.type = "lowpass";
-        deepFilter.frequency.setValueAtTime(270, now);
-        deepFilter.Q.setValueAtTime(0.9, now);
-
-        const lfo = ctx.createOscillator();
-        const lfoGain = ctx.createGain();
-        lfo.type = "sine";
-        lfo.frequency.setValueAtTime(0.15, now);
-        lfoGain.gain.setValueAtTime(85, now);
-        lfo.connect(lfoGain);
-        lfoGain.connect(deepFilter.frequency);
-
-        const currentGain = ctx.createGain();
-        currentGain.gain.setValueAtTime(0.65, now);
-
-        src.connect(deepFilter);
-        deepFilter.connect(currentGain);
-        currentGain.connect(master);
-
-        const swishFilter = ctx.createBiquadFilter();
-        swishFilter.type = "bandpass";
-        swishFilter.frequency.setValueAtTime(420, now);
-        swishFilter.Q.setValueAtTime(1.4, now);
-
-        const swishLfo = ctx.createOscillator();
-        const swishLfoGain = ctx.createGain();
-        swishLfo.type = "sine";
-        swishLfo.frequency.setValueAtTime(0.27, now);
-        swishLfoGain.gain.setValueAtTime(135, now);
-        swishLfo.connect(swishLfoGain);
-        swishLfoGain.connect(swishFilter.frequency);
-
-        const swirlGain = ctx.createGain();
-        swirlGain.gain.setValueAtTime(0.22, now);
-
-        src.connect(swishFilter);
-        swishFilter.connect(swirlGain);
-        swirlGain.connect(master);
-
-        src.start(now);
-        lfo.start(now);
-        swishLfo.start(now);
-
-        ambientMasterGain = master;
-        ambientNoiseSource = src;
-        ambientLfo = lfo;
-        ambientSwishLfo = swishLfo;
-        ambientRunningFlag = true;
-
-        triggerSwimBubbleAndSwish(ctx);
-        scheduleNextBubble();
+        el.volume = 0.48;
+        const promise = el.play();
+        if (promise && typeof promise.then === "function") {
+          promise
+            .then(() => {
+              ambientStartingFlag = false;
+            })
+            .catch(() => {
+              ambientStartingFlag = false;
+            });
+        } else {
+          ambientStartingFlag = false;
+        }
       } catch (e) {
-        ambientRunningFlag = false;
+        ambientStartingFlag = false;
       }
     }
 
     function stopAmbientWater() {
-      ambientRunningFlag = false;
-      if (ambientBubbleTimer) {
-        clearTimeout(ambientBubbleTimer);
-        ambientBubbleTimer = null;
-      }
-      const src = ambientNoiseSource;
-      const lfo = ambientLfo;
-      const swishLfo = ambientSwishLfo;
-      const master = ambientMasterGain;
-      ambientNoiseSource = null;
-      ambientLfo = null;
-      ambientSwishLfo = null;
-      ambientMasterGain = null;
-
+      ambientStartingFlag = false;
+      if (!ambientAudioEl) return;
       try {
-        if (master && audioCtxInstance) {
-          const now = audioCtxInstance.currentTime;
-          master.gain.cancelScheduledValues(now);
-          master.gain.setValueAtTime(master.gain.value, now);
-          master.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
-        }
-        setTimeout(() => {
-          try {
-            if (src) { src.stop(); src.disconnect(); }
-            if (lfo) { lfo.stop(); lfo.disconnect(); }
-            if (swishLfo) { swishLfo.stop(); swishLfo.disconnect(); }
-            if (master) master.disconnect();
-          } catch (e) {}
-        }, 200);
+        ambientAudioEl.pause();
       } catch (e) {}
     }
 
@@ -719,30 +820,17 @@
         stopAmbientWater();
         return;
       }
-      const ctx = getAudioContext();
-      if (!ctx) return;
-      if (ctx.state === "running") {
-        startAmbientWater();
-      } else {
-        ctx
-          .resume()
-          .then(() => {
-            if (isSoundEnabled()) startAmbientWater();
-          })
-          .catch(() => {});
-      }
+      startAmbientWater();
     }
 
     function unlockAudio() {
+      if (isSoundEnabled()) {
+        startAmbientWater();
+      }
       const ctx = getAudioContext();
       if (!ctx) return null;
-      const beginAfterResume = () => {
-        if (isSoundEnabled()) startAmbientWater();
-      };
       if (ctx.state === "suspended") {
-        ctx.resume().then(beginAfterResume).catch(() => {});
-      } else if (isSoundEnabled() && !ambientRunningFlag) {
-        startAmbientWater();
+        ctx.resume().catch(() => {});
       }
       if (!audioUnlockedFlag) {
         audioUnlockedFlag = true;
@@ -784,26 +872,26 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "triangle";
-          osc.frequency.setValueAtTime(920, now);
-          osc.frequency.exponentialRampToValueAtTime(380, now + 0.055);
-          gain.gain.setValueAtTime(0.32, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.068);
+          osc.frequency.setValueAtTime(960, now);
+          osc.frequency.exponentialRampToValueAtTime(360, now + 0.06);
+          gain.gain.setValueAtTime(0.45, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.072);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.072);
+          osc.stop(now + 0.075);
 
           const snapOsc = ctx.createOscillator();
           const snapGain = ctx.createGain();
           snapOsc.type = "sine";
-          snapOsc.frequency.setValueAtTime(2100, now);
-          snapOsc.frequency.exponentialRampToValueAtTime(900, now + 0.02);
-          snapGain.gain.setValueAtTime(0.18, now);
-          snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.025);
+          snapOsc.frequency.setValueAtTime(2150, now);
+          snapOsc.frequency.exponentialRampToValueAtTime(880, now + 0.024);
+          snapGain.gain.setValueAtTime(0.24, now);
+          snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.028);
           snapOsc.connect(snapGain);
           snapGain.connect(ctx.destination);
           snapOsc.start(now);
-          snapOsc.stop(now + 0.03);
+          snapOsc.stop(now + 0.032);
           return;
         }
 
@@ -811,14 +899,14 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "triangle";
-          osc.frequency.setValueAtTime(520, now);
-          osc.frequency.exponentialRampToValueAtTime(840, now + 0.075);
-          gain.gain.setValueAtTime(0.28, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+          osc.frequency.setValueAtTime(540, now);
+          osc.frequency.exponentialRampToValueAtTime(880, now + 0.085);
+          gain.gain.setValueAtTime(0.4, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.095);
+          osc.stop(now + 0.105);
           return;
         }
 
@@ -826,14 +914,14 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "sine";
-          osc.frequency.setValueAtTime(420, now);
-          osc.frequency.exponentialRampToValueAtTime(680, now + 0.085);
-          gain.gain.setValueAtTime(0.26, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+          osc.frequency.setValueAtTime(430, now);
+          osc.frequency.exponentialRampToValueAtTime(720, now + 0.095);
+          gain.gain.setValueAtTime(0.38, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.11);
+          osc.stop(now + 0.115);
           return;
         }
 
@@ -842,15 +930,15 @@
           notes.forEach((freq, idx) => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
-            const start = now + idx * 0.06;
+            const start = now + idx * 0.065;
             osc.type = "sine";
             osc.frequency.setValueAtTime(freq, start);
-            gain.gain.setValueAtTime(0.26, start);
-            gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
+            gain.gain.setValueAtTime(0.38, start);
+            gain.gain.exponentialRampToValueAtTime(0.001, start + 0.15);
             osc.connect(gain);
             gain.connect(ctx.destination);
             osc.start(start);
-            osc.stop(start + 0.15);
+            osc.stop(start + 0.16);
           });
           return;
         }
@@ -859,14 +947,14 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "triangle";
-          osc.frequency.setValueAtTime(420, now);
-          osc.frequency.exponentialRampToValueAtTime(210, now + 0.09);
-          gain.gain.setValueAtTime(0.26, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+          osc.frequency.setValueAtTime(440, now);
+          osc.frequency.exponentialRampToValueAtTime(210, now + 0.1);
+          gain.gain.setValueAtTime(0.38, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.11);
+          osc.stop(now + 0.12);
           return;
         }
 
@@ -874,14 +962,14 @@
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.type = "sine";
-          osc.frequency.setValueAtTime(920, now);
-          osc.frequency.exponentialRampToValueAtTime(640, now + 0.03);
-          gain.gain.setValueAtTime(0.2, now);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
+          osc.frequency.setValueAtTime(940, now);
+          osc.frequency.exponentialRampToValueAtTime(640, now + 0.035);
+          gain.gain.setValueAtTime(0.32, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.042);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now);
-          osc.stop(now + 0.04);
+          osc.stop(now + 0.045);
         }
       } catch (e) {}
     }
@@ -893,22 +981,16 @@
         if (nowMs - lastDelegatedSoundAt < 90) return;
         lastDelegatedSoundAt = nowMs;
       }
+      startAmbientWater();
       const ctx = unlockAudio();
-      if (!ctx) return;
-      if (ctx.state !== "running") {
-        ctx
-          .resume()
-          .then(() => {
-            if (isSoundEnabled()) {
-              startAmbientWater();
-              triggerTone(ctx, type);
-            }
-          })
-          .catch(() => {});
+      if (ctx && ctx.state === "running") {
+        triggerTone(ctx, type);
         return;
       }
-      startAmbientWater();
-      triggerTone(ctx, type);
+      playHtmlSfx(type);
+      if (ctx && ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
     }
 
     // ==================== IMAGE COMPRESSION UTILITY ====================
@@ -6961,10 +7043,17 @@
       };
 
       const toggleSound = () => {
+        if (soundOn && !isAmbientPlaying()) {
+          setSoundEnabled(true);
+          unlockAudio();
+          playSound("toggle");
+          return;
+        }
         const next = !soundOn;
         setSoundOn(next);
         setSoundEnabled(next);
         if (next) {
+          unlockAudio();
           playSound("toggle");
         }
       };
