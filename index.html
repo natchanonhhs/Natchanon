@@ -73,6 +73,16 @@
       -moz-osx-font-smoothing: grayscale;
     }
 
+    input[type="date"] {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
     .font-mono-tabular {
       font-variant-numeric: tabular-nums;
     }
@@ -478,11 +488,19 @@
       </svg>
     );
 
-    // ==================== WEB AUDIO BUTTON SOUND ENGINE ====================
+    // ==================== WEB AUDIO BUTTON & SWIMMING FISH AMBIENT ENGINE ====================
     const SOUND_STORAGE_KEY = "portal_sound_enabled";
     let audioCtxInstance = null;
     let audioUnlockedFlag = false;
     let lastDelegatedSoundAt = 0;
+
+    let ambientRunningFlag = false;
+    let ambientMasterGain = null;
+    let ambientNoiseSource = null;
+    let ambientLfo = null;
+    let ambientSwishLfo = null;
+    let ambientBubbleTimer = null;
+    let ambientNoiseBuffer = null;
 
     function getAudioContext() {
       if (typeof window === "undefined") return null;
@@ -494,11 +512,237 @@
       return audioCtxInstance;
     }
 
+    function getOrCreateAmbientNoiseBuffer(ctx) {
+      if (ambientNoiseBuffer && ambientNoiseBuffer.sampleRate === ctx.sampleRate) {
+        return ambientNoiseBuffer;
+      }
+      const durationSec = 4;
+      const length = Math.floor(ctx.sampleRate * durationSec);
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      let lastOut = 0;
+      for (let i = 0; i < length; i++) {
+        const white = Math.random() * 2 - 1;
+        lastOut = (lastOut + 0.025 * white) / 1.025;
+        data[i] = lastOut * 2.8;
+      }
+
+      const fadeSamples = Math.floor(ctx.sampleRate * 0.15);
+      for (let i = 0; i < fadeSamples; i++) {
+        const ratio = i / fadeSamples;
+        const head = data[i];
+        const tail = data[length - fadeSamples + i];
+        data[i] = head * ratio + tail * (1 - ratio);
+      }
+
+      ambientNoiseBuffer = buffer;
+      return buffer;
+    }
+
+    function triggerSwimBubbleAndSwish(ctx) {
+      if (!ambientRunningFlag || !ambientMasterGain || !isSoundEnabled()) return;
+      if (ctx.state !== "running") return;
+      try {
+        const now = ctx.currentTime;
+        if (Math.random() < 0.72) {
+          const swishSrc = ctx.createBufferSource();
+          swishSrc.buffer = getOrCreateAmbientNoiseBuffer(ctx);
+          const swishFilter = ctx.createBiquadFilter();
+          swishFilter.type = "bandpass";
+          swishFilter.Q.setValueAtTime(1.8, now);
+          const startFreq = 460 + Math.random() * 240;
+          swishFilter.frequency.setValueAtTime(startFreq, now);
+          swishFilter.frequency.exponentialRampToValueAtTime(190, now + 0.24);
+
+          const swishGain = ctx.createGain();
+          swishGain.gain.setValueAtTime(0.001, now);
+          swishGain.gain.linearRampToValueAtTime(0.18, now + 0.06);
+          swishGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+
+          swishSrc.connect(swishFilter);
+          swishFilter.connect(swishGain);
+          swishGain.connect(ambientMasterGain);
+          const offset = Math.random() * 2.5;
+          swishSrc.start(now, offset, 0.28);
+          swishSrc.stop(now + 0.29);
+        }
+
+        const count = Math.random() < 0.35 ? 2 : 1;
+        for (let i = 0; i < count; i++) {
+          const start = now + i * 0.09 + Math.random() * 0.04;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          const baseFreq = 320 + Math.random() * 220;
+          const dur = 0.06 + Math.random() * 0.045;
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(baseFreq, start);
+          osc.frequency.exponentialRampToValueAtTime(baseFreq * 2.15, start + dur);
+
+          gain.gain.setValueAtTime(0.001, start);
+          gain.gain.linearRampToValueAtTime(0.11, start + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+
+          osc.connect(gain);
+          gain.connect(ambientMasterGain);
+          osc.start(start);
+          osc.stop(start + dur + 0.01);
+        }
+      } catch (e) {}
+    }
+
+    function scheduleNextBubble() {
+      if (!ambientRunningFlag) return;
+      const delay = 850 + Math.random() * 1700;
+      ambientBubbleTimer = setTimeout(() => {
+        const ctx = getAudioContext();
+        if (ctx && ambientRunningFlag && isSoundEnabled()) {
+          triggerSwimBubbleAndSwish(ctx);
+          scheduleNextBubble();
+        }
+      }, delay);
+    }
+
+    function startAmbientWater() {
+      if (!isSoundEnabled()) return;
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+      if (ctx.state !== "running") return;
+      if (ambientRunningFlag) return;
+
+      try {
+        const now = ctx.currentTime;
+        const master = ctx.createGain();
+        master.gain.setValueAtTime(0.001, now);
+        master.gain.linearRampToValueAtTime(0.24, now + 0.9);
+        master.connect(ctx.destination);
+
+        const src = ctx.createBufferSource();
+        src.buffer = getOrCreateAmbientNoiseBuffer(ctx);
+        src.loop = true;
+
+        const deepFilter = ctx.createBiquadFilter();
+        deepFilter.type = "lowpass";
+        deepFilter.frequency.setValueAtTime(270, now);
+        deepFilter.Q.setValueAtTime(0.9, now);
+
+        const lfo = ctx.createOscillator();
+        const lfoGain = ctx.createGain();
+        lfo.type = "sine";
+        lfo.frequency.setValueAtTime(0.15, now);
+        lfoGain.gain.setValueAtTime(85, now);
+        lfo.connect(lfoGain);
+        lfoGain.connect(deepFilter.frequency);
+
+        const currentGain = ctx.createGain();
+        currentGain.gain.setValueAtTime(0.65, now);
+
+        src.connect(deepFilter);
+        deepFilter.connect(currentGain);
+        currentGain.connect(master);
+
+        const swishFilter = ctx.createBiquadFilter();
+        swishFilter.type = "bandpass";
+        swishFilter.frequency.setValueAtTime(420, now);
+        swishFilter.Q.setValueAtTime(1.4, now);
+
+        const swishLfo = ctx.createOscillator();
+        const swishLfoGain = ctx.createGain();
+        swishLfo.type = "sine";
+        swishLfo.frequency.setValueAtTime(0.27, now);
+        swishLfoGain.gain.setValueAtTime(135, now);
+        swishLfo.connect(swishLfoGain);
+        swishLfoGain.connect(swishFilter.frequency);
+
+        const swirlGain = ctx.createGain();
+        swirlGain.gain.setValueAtTime(0.22, now);
+
+        src.connect(swishFilter);
+        swishFilter.connect(swirlGain);
+        swirlGain.connect(master);
+
+        src.start(now);
+        lfo.start(now);
+        swishLfo.start(now);
+
+        ambientMasterGain = master;
+        ambientNoiseSource = src;
+        ambientLfo = lfo;
+        ambientSwishLfo = swishLfo;
+        ambientRunningFlag = true;
+
+        triggerSwimBubbleAndSwish(ctx);
+        scheduleNextBubble();
+      } catch (e) {
+        ambientRunningFlag = false;
+      }
+    }
+
+    function stopAmbientWater() {
+      ambientRunningFlag = false;
+      if (ambientBubbleTimer) {
+        clearTimeout(ambientBubbleTimer);
+        ambientBubbleTimer = null;
+      }
+      const src = ambientNoiseSource;
+      const lfo = ambientLfo;
+      const swishLfo = ambientSwishLfo;
+      const master = ambientMasterGain;
+      ambientNoiseSource = null;
+      ambientLfo = null;
+      ambientSwishLfo = null;
+      ambientMasterGain = null;
+
+      try {
+        if (master && audioCtxInstance) {
+          const now = audioCtxInstance.currentTime;
+          master.gain.cancelScheduledValues(now);
+          master.gain.setValueAtTime(master.gain.value, now);
+          master.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        }
+        setTimeout(() => {
+          try {
+            if (src) { src.stop(); src.disconnect(); }
+            if (lfo) { lfo.stop(); lfo.disconnect(); }
+            if (swishLfo) { swishLfo.stop(); swishLfo.disconnect(); }
+            if (master) master.disconnect();
+          } catch (e) {}
+        }, 200);
+      } catch (e) {}
+    }
+
+    function syncAmbientSound(enabled = isSoundEnabled()) {
+      if (!enabled) {
+        stopAmbientWater();
+        return;
+      }
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      if (ctx.state === "running") {
+        startAmbientWater();
+      } else {
+        ctx
+          .resume()
+          .then(() => {
+            if (isSoundEnabled()) startAmbientWater();
+          })
+          .catch(() => {});
+      }
+    }
+
     function unlockAudio() {
       const ctx = getAudioContext();
       if (!ctx) return null;
+      const beginAfterResume = () => {
+        if (isSoundEnabled()) startAmbientWater();
+      };
       if (ctx.state === "suspended") {
-        ctx.resume().catch(() => {});
+        ctx.resume().then(beginAfterResume).catch(() => {});
+      } else if (isSoundEnabled() && !ambientRunningFlag) {
+        startAmbientWater();
       }
       if (!audioUnlockedFlag) {
         audioUnlockedFlag = true;
@@ -529,6 +773,7 @@
       try {
         localStorage.setItem(SOUND_STORAGE_KEY, String(enabled));
       } catch (e) {}
+      syncAmbientSound(enabled);
     }
 
     function triggerTone(ctx, type) {
@@ -541,7 +786,7 @@
           osc.type = "triangle";
           osc.frequency.setValueAtTime(920, now);
           osc.frequency.exponentialRampToValueAtTime(380, now + 0.055);
-          gain.gain.setValueAtTime(0.28, now);
+          gain.gain.setValueAtTime(0.32, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + 0.068);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -553,7 +798,7 @@
           snapOsc.type = "sine";
           snapOsc.frequency.setValueAtTime(2100, now);
           snapOsc.frequency.exponentialRampToValueAtTime(900, now + 0.02);
-          snapGain.gain.setValueAtTime(0.16, now);
+          snapGain.gain.setValueAtTime(0.18, now);
           snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.025);
           snapOsc.connect(snapGain);
           snapGain.connect(ctx.destination);
@@ -568,7 +813,7 @@
           osc.type = "triangle";
           osc.frequency.setValueAtTime(520, now);
           osc.frequency.exponentialRampToValueAtTime(840, now + 0.075);
-          gain.gain.setValueAtTime(0.24, now);
+          gain.gain.setValueAtTime(0.28, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -583,7 +828,7 @@
           osc.type = "sine";
           osc.frequency.setValueAtTime(420, now);
           osc.frequency.exponentialRampToValueAtTime(680, now + 0.085);
-          gain.gain.setValueAtTime(0.22, now);
+          gain.gain.setValueAtTime(0.26, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -600,7 +845,7 @@
             const start = now + idx * 0.06;
             osc.type = "sine";
             osc.frequency.setValueAtTime(freq, start);
-            gain.gain.setValueAtTime(0.24, start);
+            gain.gain.setValueAtTime(0.26, start);
             gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
             osc.connect(gain);
             gain.connect(ctx.destination);
@@ -616,7 +861,7 @@
           osc.type = "triangle";
           osc.frequency.setValueAtTime(420, now);
           osc.frequency.exponentialRampToValueAtTime(210, now + 0.09);
-          gain.gain.setValueAtTime(0.24, now);
+          gain.gain.setValueAtTime(0.26, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -631,7 +876,7 @@
           osc.type = "sine";
           osc.frequency.setValueAtTime(920, now);
           osc.frequency.exponentialRampToValueAtTime(640, now + 0.03);
-          gain.gain.setValueAtTime(0.18, now);
+          gain.gain.setValueAtTime(0.2, now);
           gain.gain.exponentialRampToValueAtTime(0.001, now + 0.035);
           osc.connect(gain);
           gain.connect(ctx.destination);
@@ -650,6 +895,19 @@
       }
       const ctx = unlockAudio();
       if (!ctx) return;
+      if (ctx.state !== "running") {
+        ctx
+          .resume()
+          .then(() => {
+            if (isSoundEnabled()) {
+              startAmbientWater();
+              triggerTone(ctx, type);
+            }
+          })
+          .catch(() => {});
+        return;
+      }
+      startAmbientWater();
       triggerTone(ctx, type);
     }
 
@@ -3882,49 +4140,51 @@
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">รหัสลิงก์บทความ</label>
                   <input
                     type="text"
                     value={slug}
                     onChange={(e) => setSlug(e.target.value)}
                     placeholder="story-slug"
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full`}
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">หมวดหมู่</label>
                   <input
                     type="text"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     placeholder="เช่น สถาปัตยกรรมระบบ"
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full`}
                   />
                 </div>
-                <div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">วันที่เผยแพร่</label>
                   <input
                     type="date"
                     value={createdAt}
                     onChange={(e) => setCreatedAt(e.target.value)}
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full appearance-none`}
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium mb-1">
-                  คำสำคัญ คั่นด้วยเครื่องหมายจุลภาค
-                </label>
-                <input
-                  type="text"
-                  value={tagsText}
-                  onChange={(e) => setTagsText(e.target.value)}
-                  placeholder="เช่น การออกแบบเว็บ, ฐานข้อมูล, บันทึกการเรียนรู้"
-                  className={inputClass}
-                />
+                <div className="min-w-0">
+                  <label className="block text-xs font-medium mb-1">
+                    คำสำคัญ คั่นด้วยเครื่องหมายจุลภาค
+                  </label>
+                  <input
+                    type="text"
+                    value={tagsText}
+                    onChange={(e) => setTagsText(e.target.value)}
+                    placeholder="เช่น การออกแบบเว็บ, ฐานข้อมูล, บันทึกการเรียนรู้"
+                    className={`${inputClass} min-w-0 max-w-full`}
+                  />
+                </div>
               </div>
 
               <div
@@ -4667,36 +4927,37 @@
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">วันที่จัดกิจกรรม</label>
                   <input
                     type="date"
                     value={eventDate}
                     onChange={(e) => setEventDate(e.target.value)}
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full appearance-none`}
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">ประเภทกิจกรรม</label>
                   <input
                     type="text"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     placeholder="งานอาสา ค่ายวิชาการ โครงการพัฒนา"
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full`}
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">สถานที่</label>
-                  <input
-                    type="text"
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    placeholder="ระบุสถานที่จัดกิจกรรม"
-                    className={inputClass}
-                  />
-                </div>
+              </div>
+
+              <div className="min-w-0">
+                <label className="block text-xs font-medium mb-1">สถานที่</label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="ระบุสถานที่จัดกิจกรรม"
+                  className={`${inputClass} min-w-0 max-w-full`}
+                />
               </div>
 
               <div>
@@ -5236,46 +5497,46 @@
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">ชื่อเหตุการณ์</label>
                   <input
                     type="text"
                     value={eventTitle}
                     onChange={(e) => setEventTitle(e.target.value)}
                     placeholder="ระบุชื่อกิจกรรม"
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full`}
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">วันที่บันทึก</label>
                   <input
                     type="date"
                     value={eventDate}
                     onChange={(e) => setEventDate(e.target.value)}
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full appearance-none`}
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">สถานที่</label>
                   <input
                     type="text"
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
                     placeholder="ระบุสถานที่"
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full`}
                   />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <label className="block text-xs font-medium mb-1">หมวดหมู่</label>
                   <input
                     type="text"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     placeholder="ภาพบรรยากาศ"
-                    className={inputClass}
+                    className={`${inputClass} min-w-0 max-w-full`}
                   />
                 </div>
               </div>
@@ -6708,7 +6969,7 @@
         }
       };
 
-      // Global Web Audio button & link press sound delegation
+      // Global Web Audio button & link press sound + continuous underwater ambient delegation
       useEffect(() => {
         let lastPressSoundAt = 0;
         const matchInteractive = (target) => {
@@ -6720,9 +6981,27 @@
           return hit;
         };
 
+        if (
+          isSoundEnabled() &&
+          typeof navigator !== "undefined" &&
+          navigator.userActivation &&
+          navigator.userActivation.hasBeenActive
+        ) {
+          unlockAudio();
+        }
+
+        const handleTouchStart = (ev) => {
+          unlockAudio();
+          if (matchInteractive(ev.target)) {
+            lastPressSoundAt = Date.now();
+            playSound("click", true);
+          }
+        };
+
         const handlePointerDown = (ev) => {
           unlockAudio();
-          if (ev.button === 0 && matchInteractive(ev.target)) {
+          const isPrimary = ev.pointerType === "touch" || ev.button === 0 || ev.button === undefined;
+          if (isPrimary && matchInteractive(ev.target)) {
             lastPressSoundAt = Date.now();
             playSound("click", true);
           }
@@ -6735,15 +7014,24 @@
           }
         };
 
-        const handleKeyUnlock = () => unlockAudio();
+        const handleAnyGestureUnlock = () => unlockAudio();
+        const handleVisibility = () => {
+          if (document.visibilityState === "visible" && isSoundEnabled()) {
+            unlockAudio();
+          }
+        };
 
+        document.addEventListener("touchstart", handleTouchStart, { capture: true, passive: true });
         document.addEventListener("pointerdown", handlePointerDown, { capture: true, passive: true });
         document.addEventListener("click", handleGlobalClick, { capture: true });
-        document.addEventListener("keydown", handleKeyUnlock, { capture: true, passive: true });
+        document.addEventListener("keydown", handleAnyGestureUnlock, { capture: true, passive: true });
+        document.addEventListener("visibilitychange", handleVisibility);
         return () => {
+          document.removeEventListener("touchstart", handleTouchStart, { capture: true });
           document.removeEventListener("pointerdown", handlePointerDown, { capture: true });
           document.removeEventListener("click", handleGlobalClick, { capture: true });
-          document.removeEventListener("keydown", handleKeyUnlock, { capture: true });
+          document.removeEventListener("keydown", handleAnyGestureUnlock, { capture: true });
+          document.removeEventListener("visibilitychange", handleVisibility);
         };
       }, []);
 
