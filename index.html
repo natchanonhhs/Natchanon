@@ -102,41 +102,52 @@
       }
     };
 
-    let _ctx = null, _lastAt = 0;
+    let _ctx = null, _unlocked = false, _lastAt = 0;
     const getSound = () => { try { const v = localStorage.getItem("portal_sound_enabled"); return v === null ? true : v === "true"; } catch { return true; } };
     const setSound = (v) => { try { localStorage.setItem("portal_sound_enabled", String(v)); } catch {} };
+    function unlockAudio() {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return null;
+      if (!_ctx || _ctx.state === "closed") _ctx = new Ctor();
+      if (_ctx.state === "suspended") _ctx.resume().catch(() => {});
+      if (!_unlocked) {
+        _unlocked = true;
+        try { const b = _ctx.createBuffer(1, 1, 22050), s = _ctx.createBufferSource(); s.buffer = b; s.connect(_ctx.destination); s.start(0); } catch {}
+      }
+      return _ctx;
+    }
     function runTone(ctx, type) {
       try {
         const t = ctx.currentTime;
         if (type === "success") {
           [523.25, 659.25].forEach((f, i) => {
             const o = ctx.createOscillator(), g = ctx.createGain();
-            o.type = "sine"; o.frequency.setValueAtTime(f, t + i * 0.055);
-            g.gain.setValueAtTime(0.07, t + i * 0.055); g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.055 + 0.12);
-            o.connect(g); g.connect(ctx.destination); o.start(t + i * 0.055); o.stop(t + i * 0.055 + 0.13);
+            o.type = "sine"; o.frequency.setValueAtTime(f, t + i * 0.06);
+            g.gain.setValueAtTime(0.24, t + i * 0.06); g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.06 + 0.14);
+            o.connect(g); g.connect(ctx.destination); o.start(t + i * 0.06); o.stop(t + i * 0.06 + 0.15);
           });
           return;
         }
         const o = ctx.createOscillator(), g = ctx.createGain();
-        if (type === "toggle") { o.type = "triangle"; o.frequency.setValueAtTime(480, t); o.frequency.exponentialRampToValueAtTime(760, t + 0.065); }
-        else if (type === "open") { o.type = "sine"; o.frequency.setValueAtTime(380, t); o.frequency.exponentialRampToValueAtTime(600, t + 0.08); }
-        else if (type === "delete") { o.type = "triangle"; o.frequency.setValueAtTime(400, t); o.frequency.exponentialRampToValueAtTime(220, t + 0.085); }
-        else if (type === "snap") { o.type = "sine"; o.frequency.setValueAtTime(720, t); o.frequency.exponentialRampToValueAtTime(520, t + 0.035); }
-        else { o.type = "sine"; o.frequency.setValueAtTime(640, t); o.frequency.exponentialRampToValueAtTime(340, t + 0.045); }
-        g.gain.setValueAtTime(0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
-        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.09);
+        if (type === "toggle") { o.type = "triangle"; o.frequency.setValueAtTime(520, t); o.frequency.exponentialRampToValueAtTime(840, t + 0.075); g.gain.setValueAtTime(0.24, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.09); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.095); return; }
+        if (type === "open") { o.type = "sine"; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(680, t + 0.085); g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.1); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.11); return; }
+        if (type === "delete") { o.type = "triangle"; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(210, t + 0.09); g.gain.setValueAtTime(0.24, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.1); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.11); return; }
+        if (type === "snap") { o.type = "sine"; o.frequency.setValueAtTime(920, t); o.frequency.exponentialRampToValueAtTime(640, t + 0.03); g.gain.setValueAtTime(0.18, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.035); o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.04); return; }
+        o.type = "triangle"; o.frequency.setValueAtTime(920, t); o.frequency.exponentialRampToValueAtTime(380, t + 0.055);
+        g.gain.setValueAtTime(0.28, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.068);
+        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.072);
+        const s = ctx.createOscillator(), sg = ctx.createGain();
+        s.type = "sine"; s.frequency.setValueAtTime(2100, t); s.frequency.exponentialRampToValueAtTime(900, t + 0.02);
+        sg.gain.setValueAtTime(0.16, t); sg.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
+        s.connect(sg); sg.connect(ctx.destination); s.start(t); s.stop(t + 0.03);
       } catch {}
     }
     function playSound(type = "click", fromDelegation = false) {
       if (!getSound()) return;
       const now = Date.now();
-      if (fromDelegation && now - _lastAt < 40) return;
-      _lastAt = now;
-      const Ctor = window.AudioContext || window.webkitAudioContext;
-      if (!Ctor) return;
-      if (!_ctx) _ctx = new Ctor();
-      if (_ctx.state === "suspended") _ctx.resume().then(() => runTone(_ctx, type)).catch(() => {});
-      else runTone(_ctx, type);
+      if (fromDelegation) { if (now - _lastAt < 90) return; _lastAt = now; }
+      const ctx = unlockAudio();
+      if (ctx) runTone(ctx, type);
     }
 
     const r1 = (n) => Math.round(n * 10) / 10;
@@ -178,8 +189,8 @@
       let { x, y, w, height } = { x: el.x, y: el.y, w: el.w, height: el.h };
       if (h.includes("e")) w = snapV(Math.max(4, Math.min(100 - x, el.w + dx)), step);
       if (h.includes("s")) height = snapV(Math.max(4, Math.min(100 - y, el.h + dy)), step);
-      if (h.includes("w")) { const nw = snapV(Math.max(4, Math.min(100, el.w - dx)), step); x = Math.max(0, el.x + (el.w - nw)); w = el.x + el.w - x; }
-      if (h.includes("n")) { const nh = snapV(Math.max(4, Math.min(100, el.h - dy)), step); y = Math.max(0, el.y + (el.h - nh)); height = el.y + el.h - y; }
+      if (h.includes("w")) { const nw = snapV(Math.max(4, el.w - dx), step); x = Math.max(0, el.x + (el.w - nw)); w = el.x + el.w - x; }
+      if (h.includes("n")) { const nh = snapV(Math.max(4, el.h - dy), step); y = Math.max(0, el.y + (el.h - nh)); height = el.y + el.h - y; }
       return clampEl({ ...el, x, y, w, h: height });
     }
     function applyRatio(el, ratio, cw, ch) {
@@ -449,10 +460,17 @@
       useEffect(() => { if (!fb) { const onR = () => setFb(window.__FB__); window.addEventListener("firebase-ready", onR); return () => window.removeEventListener("firebase-ready", onR); } }, [fb]);
       useEffect(() => { document.documentElement.classList.toggle("dark", isDark); document.body.className = isDark ? "bg-black text-white transition-colors duration-300" : "bg-white text-zinc-950 transition-colors duration-300"; }, [isDark]);
       useEffect(() => {
+        let lastPress = 0;
+        const matchBtn = (t) => { const h = t?.closest?.("button, a[href], [role='button'], input[type='submit'], input[type='button'], summary"); return h && h.getAttribute("data-sound-toggle") !== "true" ? h : null; };
         const onRes = () => setDeviceMode(window.innerWidth < 640 ? "mobile" : "desktop");
-        const onClk = (ev) => { if (ev.target?.closest("button, a[href], [role='button'], input[type='submit'], input[type='button']")) playSound("click", true); };
-        window.addEventListener("resize", onRes); document.addEventListener("click", onClk);
-        return () => { window.removeEventListener("resize", onRes); document.removeEventListener("click", onClk); };
+        const onPd = (ev) => { unlockAudio(); if (ev.button === 0 && matchBtn(ev.target)) { lastPress = Date.now(); playSound("click", true); } };
+        const onClk = (ev) => { unlockAudio(); if (Date.now() - lastPress > 300 && matchBtn(ev.target)) playSound("click", true); };
+        const onKd = () => unlockAudio();
+        window.addEventListener("resize", onRes);
+        document.addEventListener("pointerdown", onPd, { capture: true, passive: true });
+        document.addEventListener("click", onClk, { capture: true });
+        document.addEventListener("keydown", onKd, { capture: true, passive: true });
+        return () => { window.removeEventListener("resize", onRes); document.removeEventListener("pointerdown", onPd, { capture: true }); document.removeEventListener("click", onClk, { capture: true }); document.removeEventListener("keydown", onKd, { capture: true }); };
       }, []);
 
       useEffect(() => {
@@ -539,7 +557,7 @@
               <a href="#" className="inline-flex items-center gap-2.5 text-lg font-semibold sm:text-xl whitespace-nowrap"><img src={BRAND_LOGO} alt="Natchanon" className="w-8 h-8 rounded-lg object-cover" /><span>Natchanon</span></a>
               <nav className="hidden md:flex items-center gap-7">{navItems.map((it) => <a key={it.href} href={it.href} className={`text-sm whitespace-nowrap hover:underline ${isDark ? "text-white/85 hover:text-white" : "text-zinc-700 hover:text-zinc-950"}`}>{it.label}</a>)}</nav>
               <div className="flex items-center gap-2.5">
-                <button type="button" onClick={() => { const n = !soundOn; setSoundOn(n); setSound(n); if (n) playSound("toggle"); }} aria-label={soundOn ? "ปิดเสียงระบบ" : "เปิดเสียงระบบ"} className={iconBtn}><Icon name={soundOn ? "volume" : "mute"} size={18} /></button>
+                <button type="button" data-sound-toggle="true" onClick={() => { const n = !soundOn; setSoundOn(n); setSound(n); if (n) playSound("toggle"); }} aria-label={soundOn ? "ปิดเสียงระบบ" : "เปิดเสียงระบบ"} className={iconBtn}><Icon name={soundOn ? "volume" : "mute"} size={18} /></button>
                 <button type="button" onClick={() => { const nt = isDark ? "light" : "dark"; setTheme(nt); try { localStorage.setItem("portal_theme", nt); } catch {} playSound("toggle"); }} aria-label="สลับโหมดสีหน้าจอ" className={iconBtn}><Icon name={isDark ? "sun" : "moon"} size={18} /></button>
                 <button type="button" onClick={() => { playSound("open"); setMobileMenu((p) => !p); }} aria-label="เปิดเมนูนำทาง" className={`md:hidden ${iconBtn}`}><Icon name={mobileMenu ? "x" : "menu"} size={20} /></button>
               </div>
