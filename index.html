@@ -6084,7 +6084,7 @@
     function HomeEditModal({ isDark, initialData, onClose, onSaved, onError }) {
       const p = initialData || {};
       const fileInputRef = useRef(null);
-      const [heroEyebrow, setHeroEyebrow] = useState(p.heroEyebrow || "Natthakn Hahab");
+      const [heroEyebrow, setHeroEyebrow] = useState(p.heroEyebrow || "Natthakan Hahab");
       const [avatarUrl, setAvatarUrl] = useState(p.avatarUrl || "");
       const [fullName, setFullName] = useState(p.fullName || "");
       const [role, setRole] = useState(p.role || "");
@@ -6122,7 +6122,7 @@
           await setDoc(
             doc(db, "site_settings", "home_profile"),
             {
-              heroEyebrow: heroEyebrow.trim() || "Natthakn Hahab",
+              heroEyebrow: heroEyebrow.trim() || "Natthakan Hahab",
               avatarUrl: avatarUrl.trim(),
               fullName: fullName.trim(),
               role: role.trim(),
@@ -6250,7 +6250,7 @@
                   type="text"
                   value={heroEyebrow}
                   onChange={(e) => setHeroEyebrow(e.target.value)}
-                  placeholder="Natthakn Hahab"
+                  placeholder="Natthakan Hahab"
                   className={inputClass}
                 />
               </div>
@@ -7388,7 +7388,7 @@
         const rp = remoteProfile || {};
         const isInitialNull = remoteProfile === null;
         const merged = {
-          heroEyebrow: clean(rp.heroEyebrow) || "Natthakn Hahab",
+          heroEyebrow: clean(rp.heroEyebrow) || "Natthakan Hahab",
           avatarUrl: clean(rp.avatarUrl),
           fullName: clean(rp.fullName) || (isInitialNull ? "NATTHAKAN HAHAB" : ""),
           role: clean(rp.role) || (isInitialNull ? "นักศึกษาชั้นปีที่ 2" : ""),
@@ -8188,7 +8188,7 @@
                     isDark ? "text-white/90" : "text-zinc-700 font-medium"
                   }`}
                 >
-                  {activeProfile.heroEyebrow || "Natthakn Hahab"}
+                  {activeProfile.heroEyebrow || "Natthakan Hahab"}
                 </div>
 
                 <h1
